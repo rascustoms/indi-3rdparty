@@ -1,0 +1,7 @@
+<devGroup group="CCDs">
+        <device label="FLIR CCD" mdpd="true">
+                <driver name="FLIR CCD">indi_flir_ccd</driver>
+		<version>0.1</version>
+	</device>
+</devGroup>
+

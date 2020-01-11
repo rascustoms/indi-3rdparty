@@ -84,6 +84,7 @@ option(WITH_DUINO "Install Ariduino Driver" On)
 option(WITH_FISHCAMP "Install Fishcamp Driver" On)
 option(WITH_GPSD "Install GPSD Driver" On)
 option(WITH_GIGE "Install GiGE machine vision Driver" Off)
+option(WITH_FLIR "Install FLIR machine vision Driver" On)
 option(WITH_DSI "Install Meade DSI Driver" On)
 option(WITH_ASICAM "Install ZWO Optics ASI Driver" On)
 option(WITH_MGEN "Install MGen Autoguider" On)
@@ -417,6 +418,11 @@ endif(WITH_GPSNMEA)
 if (WITH_GIGE)
 add_subdirectory(indi-gige)
 endif (WITH_GIGE)
+
+## FLIR
+if (WITH_FLIR)
+add_subdirectory(indi-flir)
+endif(WITH_FLIR)
 
 # MGen
 if (WITH_MGEN)

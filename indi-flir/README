@@ -1,0 +1,38 @@
+GigE CCD Driver
+===============
+
+This package provides support for FLIR machine vision cameras through Spinnaker SDK.
+
+Requirements
+============
+
++ INDI >= v1.2.0 (https://github.com/indilib/indi)
+
+	You need to install both indi and indi-devel to build this package.
+	
++ cfitsio
+
+	cfitsio-devel is required to compile support for FITS.
+	
++ spinnaker
+
+	spinnaker is required, see https://www.flir.com.au/products/spinnaker-sdk/
+	
+
+Installation
+============
+
+	See INSTALL
+	
+Use Notes
+=========
+
+    To run the driver from the command line:
+	
+	$ indiserver indi_flir_ccd
+
+
+Known issues
+============
+
+
