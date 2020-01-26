@@ -25,24 +25,32 @@
 
 #include "flir_ccd.h"
 
+static Spinnaker::SystemPtr spinSystem = nullptr;
 static std::list<FLIRCCD *> cameras;
 
 static void cleanup() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     std::list<FLIRCCD *>::iterator camera;
     for (camera = cameras.begin(); camera != cameras.end(); ++camera) {
         delete *camera;
     }
+    if (spinSystem) {
+        spinSystem->ReleaseInstance();
+    }
 }
 
 void ISInit() {
-    std::cerr << "Do I get here" << std::endl;
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     static bool isInit = false;
     if (!isInit) {
-        Spinnaker::SystemPtr system = Spinnaker::System::GetInstance();
-        Spinnaker::CameraList cams = system->GetCameras();
+        spinSystem = Spinnaker::System::GetInstance();
+        Spinnaker::CameraList cams = spinSystem->GetCameras();
+
         unsigned int numCameras = cams.GetSize();
 
         if (numCameras == 0) {
+            std::cerr << "No cameras found" << std::endl;
+            cams.Clear();
             // TODO Log
             return;
         }
@@ -54,7 +62,7 @@ void ISInit() {
             // TODO Log
         }
 
-        system->ReleaseInstance();
+        cams.Clear();
 
         atexit(cleanup);
         isInit = true;
@@ -63,6 +71,7 @@ void ISInit() {
 
 void ISGetProperties(const char * dev)
 {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     ISInit();
 
     if (cameras.empty())
@@ -84,6 +93,7 @@ void ISGetProperties(const char * dev)
 
 void ISNewSwitch(const char * dev, const char * name, ISState * states, char * names[], int num)
 {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     ISInit();
 
     std::list<FLIRCCD *>::iterator camera;
@@ -99,6 +109,7 @@ void ISNewSwitch(const char * dev, const char * name, ISState * states, char * n
 
 void ISNewText(const char * dev, const char * name, char * texts[], char * names[], int num)
 {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     ISInit();
 
     std::list<FLIRCCD *>::iterator camera;
@@ -114,6 +125,7 @@ void ISNewText(const char * dev, const char * name, char * texts[], char * names
 
 void ISNewNumber(const char * dev, const char * name, double values[], char * names[], int num)
 {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     ISInit();
 
     std::list<FLIRCCD *>::iterator camera;
@@ -130,6 +142,7 @@ void ISNewNumber(const char * dev, const char * name, double values[], char * na
 void ISNewBLOB(const char * dev, const char * name, int sizes[], int blobsizes[], char * blobs[], char * formats[],
                char * names[], int n)
 {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     INDI_UNUSED(dev);
     INDI_UNUSED(name);
     INDI_UNUSED(sizes);
@@ -139,8 +152,10 @@ void ISNewBLOB(const char * dev, const char * name, int sizes[], int blobsizes[]
     INDI_UNUSED(names);
     INDI_UNUSED(n);
 }
+
 void ISSnoopDevice(XMLEle * root)
 {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     ISInit();
 
     std::list<FLIRCCD *>::iterator camera;
@@ -150,20 +165,30 @@ void ISSnoopDevice(XMLEle * root)
 }
 
 FLIRCCD::FLIRCCD(Spinnaker::CameraPtr cam) {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     this->cam = cam;
-//    this->setDeviceName(this->cam->DeviceModelName.GetValue());
-    cam->Init();
+    this->cam->Init();
+
+    strcpy(this->name, this->cam->DeviceModelName.GetValue().c_str());
+
+    std::cerr << "Initialised: " << this->name << std::endl;
+
 }
 
 FLIRCCD::~FLIRCCD() {
-
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
+    if(cam) {
+        cam->DeInit();
+    }
 }
 
 const char *FLIRCCD::getDefaultName() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     return this->name;
 }
 
 bool FLIRCCD::initProperties() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     INDI::CCD::initProperties();
 
     //TODO check if mono or colour for bayer?
@@ -175,87 +200,131 @@ bool FLIRCCD::initProperties() {
 }
 
 void FLIRCCD::ISGetProperties(const char *dev) {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     INDI::CCD::ISGetProperties(dev);
 }
 
 bool FLIRCCD::updateProperties() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     INDI::CCD::updateProperties();
 
-    if (this->cam->IsInitialized()) {
+    if (this->cam->IsValid()) {
         this->setupParams();
 
         this->timerID = SetTimer(POLLMS);
     } else {
         rmTimer(timerID);
     }
+    return true;
 }
 
 bool FLIRCCD::Connect() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     return true;
 }
 
 bool FLIRCCD::Disconnect() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     return true;
 }
 
 bool FLIRCCD::StartExposure(float duration) {
-
-    if (duration < minDuration) {
-        //TODO log
-        duration = minDuration;
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
+    if ((duration * 1000000.) < minDuration) {
+        // TODO Log
+        std::cerr << "Shutter duration less than minimum" << std::endl;
+        duration = (float) minDuration;
+    }
+    if ((duration * 1000000.) > maxDuration) {
+        // TODO log
+        std::cerr << "Shutter duration greater than maximum" << std::endl;
+        duration = (float) maxDuration;
     }
 
-    // TODO Max duration check
-
     if (PrimaryCCD.getFrameType() == INDI::CCDChip::BIAS_FRAME) {
-        duration = minDuration;
+        duration = (float) minDuration;
     }
 
     // Set Exposure Time
-//    cam->ExposureTime.SetValue(duration * 1000000.);
-    // Trigger Exposure
-    // TODO
+    cam->ExposureTime.SetValue(duration * 1000000.);
 
+    // Trigger Exposure
+    cam->BeginAcquisition();
+
+    PrimaryCCD.setExposureDuration(duration);
     InExposure = true;
 
     return true; // Acquisition status from spinnaker?
 }
 
 bool FLIRCCD::AbortExposure() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     cam->AcquisitionAbort();
     InExposure = false;
     return true;
 }
 
 bool FLIRCCD::ISNewNumber(const char *dev, const char *name, double *values, char **names, int n) {
-    return true;
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
+    return INDI::CCD::ISNewNumber(dev, name, values, names, n);
 }
 
 bool FLIRCCD::ISNewSwitch(const char *dev, const char *name, ISState *states, char **names, int n) {
-    return true;
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
+    return INDI::CCD::ISNewSwitch(dev, name, states, names, n);
 }
 
 bool FLIRCCD::ISNewText(const char *dev, const char *name, char **texts, char **names, int n) {
-    return true;
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
+    return INDI::CCD::ISNewText(dev, name, texts, names, n);
 }
 
 void FLIRCCD::TimerHit() {
-    DefaultDevice::TimerHit();
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
+
+    if(!this->cam->IsValid()) {
+        return; // No longer connected
+    }
+
+    if (InExposure) {
+        PrimaryCCD.setExposureLeft(0);
+        InExposure = false;
+        grabImage();
+    }
+    this->timerID = this->SetTimer(POLLMS);
 }
 
 bool FLIRCCD::saveConfigItems(FILE *fp) {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     return CCD::saveConfigItems(fp);
 }
 
 bool FLIRCCD::UpdateCCDFrame(int x, int y, int w, int h) {
-    return CCD::UpdateCCDFrame(x, y, w, h);
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
+    // TODO Value checking
+    cam->Width.SetValue(w);
+    cam->Height.SetValue(h);
+    cam->OffsetX.SetValue(x);
+    cam->OffsetY.SetValue(y);
+
+    PrimaryCCD.setFrame(x, y, w, h);
+
+    int nbuf;
+    nbuf = (x * y * PrimaryCCD.getBPP() / 8);
+//    nbuf += 512;
+    PrimaryCCD.setFrameBufferSize(nbuf);
+
+
+//    return CCD::UpdateCCDFrame(x, y, w, h);
 }
 
 bool FLIRCCD::UpdateCCDBin(int binx, int biny) {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     return CCD::UpdateCCDBin(binx, biny);
 }
 
 bool FLIRCCD::UpdateCCDFrameType(INDI::CCDChip::CCD_FRAME fType) {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     INDI::CCDChip::CCD_FRAME imageFrameType = PrimaryCCD.getFrameType();
 
     if (fType == imageFrameType)
@@ -308,32 +377,118 @@ bool FLIRCCD::UpdateCCDFrameType(INDI::CCDChip::CCD_FRAME fType) {
 }
 
 bool FLIRCCD::StartStreaming() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     return CCD::StartStreaming();
 }
 
 bool FLIRCCD::StopStreaming() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     return CCD::StopStreaming();
 }
 
+int FLIRCCD::grabImage() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
+    Spinnaker::ImagePtr image = this->cam->GetNextImage();
+    uint8_t *fb = PrimaryCCD.getFrameBuffer();
+
+    if (PrimaryCCD.getFrameBufferSize() == (int) image->GetBufferSize()) {
+        std::memcpy(fb, image->GetData(), image->GetBufferSize());
+        image->Release();
+        cam->EndAcquisition();
+        this->ExposureComplete(&PrimaryCCD);
+    } else {
+        std::cerr << "Buffer's don't match" << std::endl;
+    }
+
+    return 0;
+}
+
 bool FLIRCCD::setupParams() {
+    std::cerr << __PRETTY_FUNCTION__ << std::endl;
     float x_pixel_size, y_pixel_size;
     int bit_depth;
     int x, y, w, h;
 
-    // TODO get from spinnaker
+    /** Camera Setup */
+    // Set to Mono16
+    cam->PixelFormat.SetValue(Spinnaker::PixelFormat_Mono16);
+    // Turn off auto exposure
+    cam->ExposureAuto.SetValue(Spinnaker::ExposureAutoEnums::ExposureAuto_Off);
+    // Set exposure mode to "Timed"
+    cam->ExposureMode.SetValue(Spinnaker::ExposureModeEnums::ExposureMode_Timed);
+    // Disable Frame Rate limiting
+    cam->AcquisitionFrameRateEnable.SetValue(false);
+    // Set mode to continuous
+    cam->AcquisitionMode.SetValue(Spinnaker::AcquisitionMode_Continuous);
+    // Jumbo Packets
+    cam->GevSCPSPacketSize.SetValue(9000);
+
+    // TODO put in model numbers
 
     x_pixel_size = 5.86;
     y_pixel_size = 5.86;
 
-    bit_depth = 16;
+    switch(cam->PixelSize.GetValue()) {
+        case Spinnaker::PixelSize_Bpp1:
+            bit_depth = 1;
+            break;
+        case Spinnaker::PixelSize_Bpp2:
+            bit_depth = 2;
+            break;
+        case Spinnaker::PixelSize_Bpp4:
+            bit_depth = 4;
+            break;
+        case Spinnaker::PixelSize_Bpp8:
+            bit_depth = 8;
+            break;
+        case Spinnaker::PixelSize_Bpp10:
+            bit_depth = 10;
+            break;
+        case Spinnaker::PixelSize_Bpp12:
+            bit_depth = 12;
+            break;
+        case Spinnaker::PixelSize_Bpp14:
+            bit_depth = 14;
+            break;
+        case Spinnaker::PixelSize_Bpp16:
+            bit_depth = 16;
+            break;
+        case Spinnaker::PixelSize_Bpp20:
+            bit_depth = 20;
+            break;
+        case Spinnaker::PixelSize_Bpp24:
+            bit_depth = 24;
+            break;
+        case Spinnaker::PixelSize_Bpp30:
+            bit_depth = 30;
+            break;
+        case Spinnaker::PixelSize_Bpp32:
+            bit_depth = 32;
+            break;
+        case Spinnaker::PixelSize_Bpp36:
+            bit_depth = 36;
+            break;
+        case Spinnaker::PixelSize_Bpp48:
+            bit_depth = 48;
+            break;
+        case Spinnaker::PixelSize_Bpp64:
+            bit_depth = 64;
+            break;
+        case Spinnaker::PixelSize_Bpp96:
+            bit_depth = 96;
+            break;
+        default:
+            bit_depth = 8;
+            break;
+    }
 
-    x = 0;
-    y = 0;
-    w = 1920;
-    h = 1200;
+    x = cam->OffsetX.GetMin();
+    y = cam->OffsetY.GetMin();
+    w = cam->Width.GetMax();
+    h = cam->Height.GetMax();
 
-    minDuration = 0;
-    maxDuration = 32000000.;
+    minDuration = cam->ExposureTime.GetMin();
+    maxDuration = cam->ExposureTime.GetMax();
 
     SetCCDParams(w - x, h - y, bit_depth, x_pixel_size, y_pixel_size);
 
@@ -342,14 +497,26 @@ bool FLIRCCD::setupParams() {
 //    nbuf += 512;
     PrimaryCCD.setFrameBufferSize(nbuf);
 
-
-    /** Camera Setup */
-    // Turn off auto exposure
-//    cam->ExposureAuto.SetValue(Spinnaker::ExposureAutoEnums::ExposureAuto_Off);
-    //Set exposure mode to "Timed"
-//    cam->ExposureMode.SetValue(Spinnaker::ExposureModeEnums::ExposureMode_Timed);
-
-    // TODO Setup Camera
+    switch (cam->PixelColorFilter.GetValue()) {
+        case Spinnaker::PixelColorFilter_None:
+            SetCCDCapability(GetCCDCapability() & ~CCD_HAS_BAYER);
+            break;
+        case Spinnaker::PixelColorFilter_BayerRG: // RGGB
+            IUSaveText(&BayerT[2], "RGGB");
+            break;
+        case Spinnaker::PixelColorFilter_BayerGB: // GBRG
+            IUSaveText(&BayerT[2], "GBRG");
+            break;
+        case Spinnaker::PixelColorFilter_BayerGR: // GRBG
+            IUSaveText(&BayerT[2], "GRBG");
+            break;
+        case Spinnaker::PixelColorFilter_BayerBG: // BGGR
+            IUSaveText(&BayerT[2], "BGGR");
+            break;
+        default:
+            SetCCDCapability(GetCCDCapability() & ~CCD_HAS_BAYER);
+            break;
+    }
 
     return true;
 }

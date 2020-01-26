@@ -60,11 +60,12 @@ class FLIRCCD : public INDI::CCD {
         Spinnaker::CameraPtr cam;
         char name[MAXINDIDEVICE];
 
-        float minDuration;
-        float maxDuration;
+        double minDuration;
+        double maxDuration;
 
         int timerID;
 
+        int grabImage();
         bool setupParams();
 
         friend void ::ISSnoopDevice(XMLEle * root);
