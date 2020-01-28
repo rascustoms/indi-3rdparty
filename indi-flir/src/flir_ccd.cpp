@@ -21,6 +21,7 @@
 
 #include "indidevapi.h"
 #include "eventloop.h"
+#include <stream/streammanager.h>
 #include <iostream>
 
 #include "flir_ccd.h"
@@ -192,7 +193,7 @@ bool FLIRCCD::initProperties() {
     INDI::CCD::initProperties();
 
     //TODO check if mono or colour for bayer?
-    this->SetCCDCapability(CCD_CAN_ABORT | CCD_CAN_BIN | CCD_CAN_SUBFRAME | CCD_HAS_BAYER);
+    this->SetCCDCapability(CCD_CAN_ABORT | CCD_CAN_BIN | CCD_CAN_SUBFRAME | CCD_HAS_BAYER | CCD_HAS_STREAMING);
     this->addConfigurationControl();
     this->addDebugControl();
     return true;
@@ -230,6 +231,12 @@ bool FLIRCCD::Disconnect() {
 
 bool FLIRCCD::StartExposure(float duration) {
     std::cerr << __PRETTY_FUNCTION__ << std::endl;
+
+    if (Streamer->isBusy()) {
+        std::cerr << "Cannot take exposure while streaming" << std::endl;
+        return false;
+    }
+
     if ((duration * 1000000.) < minDuration) {
         // TODO Log
         std::cerr << "Shutter duration less than minimum" << std::endl;
@@ -314,6 +321,9 @@ bool FLIRCCD::UpdateCCDFrame(int x, int y, int w, int h) {
 //    nbuf += 512;
     PrimaryCCD.setFrameBufferSize(nbuf);
 
+    Streamer->setSize(w, h);
+
+    return true;
 
 //    return CCD::UpdateCCDFrame(x, y, w, h);
 }
@@ -378,17 +388,75 @@ bool FLIRCCD::UpdateCCDFrameType(INDI::CCDChip::CCD_FRAME fType) {
 
 bool FLIRCCD::StartStreaming() {
     std::cerr << __PRETTY_FUNCTION__ << std::endl;
-    return CCD::StartStreaming();
+
+    // TODO Framerate Control?
+
+    // TODO If not need to manage sleep times to do with max framerate of interface
+
+    std::unique_lock<std::mutex> guard(liveStreamMutex);
+    m_RunLiveStream = true;
+    guard.unlock();
+    liveViewThread = std::thread(&FLIRCCD::streamLiveView, this);
+
+    cam->BeginAcquisition();
+
+    return true;
 }
 
 bool FLIRCCD::StopStreaming() {
     std::cerr << __PRETTY_FUNCTION__ << std::endl;
-    return CCD::StopStreaming();
+
+    std::unique_lock<std::mutex> guard(liveStreamMutex);
+    m_RunLiveStream = false;
+    guard.unlock();
+    liveViewThread.join();
+
+    cam->EndAcquisition();
+
+    return true;
+}
+
+void FLIRCCD::streamLiveView() {
+    while (true) {
+        std::unique_lock<std::mutex> guard(liveStreamMutex);
+        if (!m_RunLiveStream) {
+            break;
+        }
+        guard.unlock();
+
+        Spinnaker::ImagePtr image = cam->GetNextImage();
+
+        // TODO timeout?
+        while(image->IsIncomplete()) {
+            image->Release();
+            image = cam->GetNextImage();
+        }
+
+        uint8_t *fb = PrimaryCCD.getFrameBuffer();
+
+        if (PrimaryCCD.getFrameBufferSize() == (int) image->GetBufferSize()) {
+            std::unique_lock<std::mutex> ccdguard(ccdBufferLock);
+            std::memcpy(fb, image->GetData(), image->GetBufferSize());
+            ccdguard.unlock();
+            image->Release();
+        } else {
+            std::cerr << "Buffer's don't match" << std::endl;
+        }
+
+        Streamer->newFrame(fb, PrimaryCCD.getFrameBufferSize());
+    }
 }
 
 int FLIRCCD::grabImage() {
     std::cerr << __PRETTY_FUNCTION__ << std::endl;
-    Spinnaker::ImagePtr image = this->cam->GetNextImage();
+    Spinnaker::ImagePtr image = cam->GetNextImage();
+
+    // TODO timeout?
+    while(image->IsIncomplete()) {
+        image->Release();
+        image = cam->GetNextImage();
+    }
+
     uint8_t *fb = PrimaryCCD.getFrameBuffer();
 
     if (PrimaryCCD.getFrameBufferSize() == (int) image->GetBufferSize()) {
@@ -411,22 +479,87 @@ bool FLIRCCD::setupParams() {
 
     /** Camera Setup */
     // Set to Mono16
-    cam->PixelFormat.SetValue(Spinnaker::PixelFormat_Mono16);
+    cam->PixelFormat.SetValue(Spinnaker::PixelFormat_BayerRG16);
     // Turn off auto exposure
     cam->ExposureAuto.SetValue(Spinnaker::ExposureAutoEnums::ExposureAuto_Off);
     // Set exposure mode to "Timed"
     cam->ExposureMode.SetValue(Spinnaker::ExposureModeEnums::ExposureMode_Timed);
     // Disable Frame Rate limiting
     cam->AcquisitionFrameRateEnable.SetValue(false);
+    // TODO Gain Control?
     // Set mode to continuous
     cam->AcquisitionMode.SetValue(Spinnaker::AcquisitionMode_Continuous);
+    // Check maximum packet size
+    std::cerr << "Maximum Packet Size: " << cam->DiscoverMaxPacketSize() << std::endl;
     // Jumbo Packets
-    cam->GevSCPSPacketSize.SetValue(9000);
+    cam->GevSCPSPacketSize.SetValue(cam->DiscoverMaxPacketSize());
 
+    // If BFLY-PGE-23S6, set to 12 bit ADC (Mode 7)
+    Spinnaker::GenApi::CEnumerationPtr ptrVideoMode = cam->GetNodeMap().GetNode("VideoMode");
+    if (!IsAvailable(ptrVideoMode) || !IsWritable(ptrVideoMode)) {
+        // TODO Error
+        std::cerr << "Unable to get VideoMode in NodeMap" << std::endl;
+    } else {
+        Spinnaker::GenApi::CEnumEntryPtr ptrVideoMode7 = ptrVideoMode->GetEntryByName("Mode7");
+        if (!IsAvailable(ptrVideoMode7) || !IsReadable(ptrVideoMode7)) {
+            // TODO Error
+            std::cerr << "Unable to get Mode7 in VideoMode" << std::endl;
+        } else {
+            int64_t videoMode7 = ptrVideoMode7->GetValue();
+            ptrVideoMode->SetIntValue(videoMode7);
+        }
+    }
     // TODO put in model numbers
 
+    //BFLY-PGE-03S2
+//    x_pixel_size = 7.4;
+//    y_pixel_size = 7.4;
+    //BFLY-PGE-03S3
+//    x_pixel_size = 9.9;
+//    y_pixel_size = 9.9;
+    //BFLY-PGE-05S2
+//    x_pixel_size = 6.0;
+//    y_pixel_size = 6.0;
+    //BFLY-PGE-09S2
+//    x_pixel_size = 4.08;
+//    y_pixel_size = 4.08;
+    //BFLY-PGE-12A2
+//    x_pixel_size = 3.75;
+//    y_pixel_size = 3.75;
+    //BFLY-PGE-13E4
+//    x_pixel_size = 5.3;
+//    y_pixel_size = 5.3;
+    //BFLY-PGE-13H2
+//    x_pixel_size = 3.75;
+//    y_pixel_size = 3.75;
+    //BFLY-PGE-13S2
+//    x_pixel_size = 3.75;
+//    y_pixel_size = 3.75;
+    //BFLY-PGE-14S2
+//    x_pixel_size = 3.75;
+//    y_pixel_size = 3.75;
+    //BFLY-PGE-20E4
+//    x_pixel_size = 4.5;
+//    y_pixel_size = 4.5;
+    //BFLY-PGE-23S2
+//    x_pixel_size = 2.8;
+//    y_pixel_size = 2.8;
+    //BFLY-PGE-23S6
     x_pixel_size = 5.86;
     y_pixel_size = 5.86;
+    //BFLY-PGE-31S4
+//    x_pixel_size = 3.45;
+//    y_pixel_size = 3.45;
+    //BFLY-PGE-50A2
+//    x_pixel_size = 2.2;
+//    y_pixel_size = 2.2;
+    //BFLY-PGE-50H5
+//    x_pixel_size = 3.45;
+//    y_pixel_size = 3.45;
+    //BFLY-PGE-50S5
+//    x_pixel_size = 3.45;
+//    y_pixel_size = 3.45;
+
 
     switch(cam->PixelSize.GetValue()) {
         case Spinnaker::PixelSize_Bpp1:
@@ -497,24 +630,32 @@ bool FLIRCCD::setupParams() {
 //    nbuf += 512;
     PrimaryCCD.setFrameBufferSize(nbuf);
 
+    Streamer->setSize(PrimaryCCD.getXRes(), PrimaryCCD.getYRes());
+
     switch (cam->PixelColorFilter.GetValue()) {
         case Spinnaker::PixelColorFilter_None:
             SetCCDCapability(GetCCDCapability() & ~CCD_HAS_BAYER);
+            Streamer->setPixelFormat(INDI_MONO, bit_depth);
             break;
         case Spinnaker::PixelColorFilter_BayerRG: // RGGB
             IUSaveText(&BayerT[2], "RGGB");
+            Streamer->setPixelFormat(INDI_BAYER_RGGB, bit_depth);
             break;
         case Spinnaker::PixelColorFilter_BayerGB: // GBRG
             IUSaveText(&BayerT[2], "GBRG");
+            Streamer->setPixelFormat(INDI_BAYER_GBRG, bit_depth);
             break;
         case Spinnaker::PixelColorFilter_BayerGR: // GRBG
             IUSaveText(&BayerT[2], "GRBG");
+            Streamer->setPixelFormat(INDI_BAYER_GRBG, bit_depth);
             break;
         case Spinnaker::PixelColorFilter_BayerBG: // BGGR
             IUSaveText(&BayerT[2], "BGGR");
+            Streamer->setPixelFormat(INDI_BAYER_BGGR, bit_depth);
             break;
         default:
             SetCCDCapability(GetCCDCapability() & ~CCD_HAS_BAYER);
+            Streamer->setPixelFormat(INDI_MONO, bit_depth);
             break;
     }
 

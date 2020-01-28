@@ -8,6 +8,7 @@ include(GNUInstallDirs)
 find_package(CFITSIO REQUIRED)
 find_package(INDI REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(Threads REQUIRED)
 find_package(SPINNAKER REQUIRED)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config.h )
@@ -31,7 +32,7 @@ ENDIF ()
 
 add_executable(indi_flir_ccd ${FLIR_SRCS})
 
-target_link_libraries(indi_flir_ccd ${INDI_LIBRARIES} ${SPINNAKER_LIBRARIES} ${CFITSIO_LIBRARIES} m ${ZLIB_LIBRARY})
+target_link_libraries(indi_flir_ccd ${INDI_LIBRARIES} ${SPINNAKER_LIBRARIES} ${CFITSIO_LIBRARIES} m ${ZLIB_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 
 install(TARGETS indi_flir_ccd RUNTIME DESTINATION bin)
 

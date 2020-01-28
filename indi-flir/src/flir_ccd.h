@@ -55,6 +55,11 @@ class FLIRCCD : public INDI::CCD {
 
         bool StartStreaming() override;
         bool StopStreaming() override;
+        void streamLiveView();
+
+        std::mutex liveStreamMutex;
+        bool m_RunLiveStream;
+
 
     private:
         Spinnaker::CameraPtr cam;
@@ -67,6 +72,8 @@ class FLIRCCD : public INDI::CCD {
 
         int grabImage();
         bool setupParams();
+
+        std::thread liveViewThread;
 
         friend void ::ISSnoopDevice(XMLEle * root);
         friend void ::ISGetProperties(const char * dev);
